@@ -61,6 +61,16 @@ class MatchSettings:
     weights: Weights
 
 
+def safe_rerun():
+    """Hilfsfunktion, um einen Rerun auf jeder Streamlit-Version fehlerfrei auszuführen."""
+    if hasattr(st, "rerender"):
+        st.rerender()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        st.rerun()
+
+
 def normalize_header(value: object) -> str:
     text = str(value).strip().lower()
     text = re.sub(r"[\n\r\t_\-/]+", " ", text)
@@ -245,7 +255,7 @@ def make_output_row(nr: int, a: pd.Series, b: pd.Series, details: Dict[str, floa
     unique_id = f"KAMPF: {a['Name']} ({a['Verein']}) vs {b['Name']} ({b['Verein']}) [{disc}]"
     return {
         "id": unique_id,
-        "Kampf Nr.": nr,
+        "Campf Nr.": nr,
         "Kampf-Disziplin": disc,
         "Kämpfer A": a["Name"], "Verein A": a["Verein"], "Geschlecht A": a["Geschlecht_norm"], "Alter A": a["Alter"], "Gewicht A": a["Gewicht"], "Gewichtsklasse A": a["Gewichtsklasse"], "Kämpfe A": a["Kämpfe"], "Klasse A": a["Klasse"], "Bilanz A": f'{a["Siege"]}-{a["Niederlagen"]}',
         "Kämpfer B": b["Name"], "Verein B": b["Verein"], "Geschlecht B": b["Geschlecht_norm"], "Alter B": b["Alter"], "Gewicht B": b["Gewicht"], "Gewichtsklasse B": b["Gewichtsklasse"], "Kämpfe B": b["Kämpfe"], "Klasse B": b["Klasse"], "Bilanz B": f'{b["Siege"]}-{b["Niederlagen"]}',
@@ -313,14 +323,14 @@ with st.sidebar:
         new_limit = st.number_input("Maximalgewicht (kg)", min_value=1.0, value=70.0, step=0.5)
         if st.form_submit_button("Hinzufügen") and new_name:
             st.session_state.weight_classes.append((new_name, float(new_limit)))
-            st.rerun()
+            safe_rerun()
 
     for idx, (name, limit) in enumerate(sorted(st.session_state.weight_classes, key=lambda x: x[1])):
         col_c1, col_c2 = st.columns([3, 1])
         col_c1.write(f"**{name}**: -{limit} kg")
         if col_c2.button("❌", key=f"del_{idx}"):
             st.session_state.weight_classes.remove((name, limit))
-            st.rerun()
+            safe_rerun()
 
     st.markdown("---")
     st.subheader("📉 Strafen-Multiplikator")
@@ -386,7 +396,7 @@ if not st.session_state.current_matches.empty:
     col1, col2, col3 = st.columns(3)
     col1.metric("Paarungen Gesamt", len(st.session_state.current_matches))
     col2.metric("Kämpfer auf der Liste", len(st.session_state.raw_fighters_data))
-    col3.metric("Noch ungematcht", len(st.session_state.current_unmatched))
+    col3.metric("Noch ungemacht", len(st.session_state.current_unmatched))
 
     st.header("🔀 Kampfreihenfolge per Drag-and-Drop festlegen")
     st.info("Ziehe die Kämpfe mit der Maus in die gewünschte Reihenfolge. Die Kampfnummern passen sich automatisch an.")
@@ -399,7 +409,7 @@ if not st.session_state.current_matches.empty:
         st.session_state.current_matches['id'] = pd.Categorical(st.session_state.current_matches['id'], categories=sorted_id_list, ordered=True)
         st.session_state.current_matches = st.session_state.current_matches.sort_values('id').reset_index(drop=True)
         st.session_state.current_matches["Kampf Nr."] = range(1, len(st.session_state.current_matches) + 1)
-        st.rerun()
+        safe_rerun()
 
     st.subheader("Aktuelle Kampfliste Übersicht")
     st.dataframe(st.session_state.current_matches.drop(columns=["id"]), use_container_width=True, hide_index=True)
@@ -429,7 +439,7 @@ if not st.session_state.current_matches.empty:
             st.session_state.current_matches = pd.concat([st.session_state.current_matches, new_row], ignore_index=True)
             st.session_state.current_unmatched = st.session_state.current_unmatched[~st.session_state.current_unmatched["ID"].isin([f1_id, f2_id])]
             st.success(f"Match zwischen {fa['Name']} und {fb['Name']} erzwungen!")
-            st.rerun()
+            safe_rerun()
 
     # 💾 ARBEITSSTAND SICHERN (JSON EXPORT)
     st.subheader("💾 Aktuellen Arbeitsstand sichern")
@@ -447,7 +457,7 @@ if not st.session_state.current_matches.empty:
 
 # Expander für zusätzliche Datenansichten
 if not st.session_state.current_unmatched.empty:
-    with st.expander("Verbleibende ungematchte Kämpfer anzeigen"):
+    with st.expander("Verbleibende ungemachtete Kämpfer anzeigen"):
         st.dataframe(st.session_state.current_unmatched, use_container_width=True, hide_index=True)
 
 if not st.session_state.all_candidates.empty:
