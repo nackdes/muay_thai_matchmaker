@@ -449,9 +449,11 @@ if not st.session_state.current_matches.empty:
         "raw_fighters": st.session_state.raw_fighters_data.to_dict(orient="records")
     }, indent=2)
     
-    # Zeitstempel im Format YYYYMMDD-HHMMSS generieren
+    # Lokale mitteleuropäische Zeit (Berlin) erzwingen, unabhängig vom Server-Standort
     from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    from zoneinfo import ZoneInfo
+    
+    timestamp = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y%m%d-%H%M%S")
     backup_filename = f"matchmaker_speicherstand_{timestamp}.json"
     
     st.download_button(
