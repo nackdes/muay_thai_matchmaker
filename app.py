@@ -119,8 +119,6 @@ def get_experience_class(fights: int) -> str:
 
 
 def get_weight_class(weight: float, weight_classes: List[Tuple[str, float]]) -> str:
-    """Ordnet das Gewicht dynamisch anhand der konfigurierten Obergrenzen zu."""
-    # Sortiere Klassen nach Gewichtsobergrenze aufsteigend
     sorted_classes = sorted(weight_classes, key=lambda x: x[1])
     for name, limit in sorted_classes:
         if weight <= limit:
@@ -358,9 +356,9 @@ def template_excel() -> bytes:
 # Streamlit Seiten-Konfiguration
 st.set_page_config(page_title="Muay Thai Matchmaker Pro", page_icon="🥊", layout="wide")
 st.title("🥊 Muay Thai Matchmaker Pro")
-st.caption("Importiere eine Excel-Datei und finde optimale, nicht überlappende Kampfpaarungen.")
+st.caption("Importiere eine Excel-Datei und finde optimale, nicht überlappende Kampfpaarungen. Gleicher Verein wird immer ausgeschlossen.")
 
-# Initialisiere Standard-Gewichtsklassen im Session State (IFMA/MTBD-Stil als solide Basis)
+# Initialisiere Standard-Gewichtsklassen im Session State
 if "weight_classes" not in st.session_state:
     st.session_state.weight_classes = [
         ("Fliegengewicht", 51.0),
@@ -378,17 +376,46 @@ if "weight_classes" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Matching-Regeln")
-    same_gender_only = st.checkbox("Nur gleiches Geschlecht matchen", value=True)
-    strict_class_matching = st.checkbox("Strikte Klassen-Trennung (Erfahrung)", value=False)
-    strict_weight_class = st.checkbox("Strikte Gewichtsklassen-Trennung", value=False)
+    same_gender_only = st.checkbox(
+        "Nur gleiches Geschlecht matchen", 
+        value=True,
+        help="Wenn aktiv, können Personen mit unterschiedlichen Geschlechtseinträgen niemals gegeneinander gelost werden."
+    )
+    strict_class_matching = st.checkbox(
+        "Strikte Klassen-Trennung (Erfahrung)", 
+        value=False,
+        help="Teilt Kämpfer anhand ihrer Kämpfe in Leistungsklassen ein (z.B. Newcomer, C-Klasse). Bei Aktivierung wird klassenübergreifendes Matchen komplett blockiert."
+    )
+    strict_weight_class = st.checkbox(
+        "Strikte Gewichtsklassen-Trennung", 
+        value=False,
+        help="Erzwingt, dass Kämpfer NUR innerhalb der exakt selben Gewichtsklasse (z.B. Weltergewicht) gepaart werden. Wenn deaktiviert, entscheidet die kg-Differenz."
+    )
     
     st.markdown("---")
-    max_weight_diff = st.number_input("Max. Gewichtsdifferenz in kg", min_value=0.1, max_value=30.0, value=5.0, step=0.5)
-    max_age_diff = st.number_input("Max. Altersdifferenz", min_value=1, max_value=60, value=8, step=1)
-    max_fight_diff = st.number_input("Max. Kampfdifferenz", min_value=0, max_value=100, value=5, step=1)
+    max_weight_diff = st.number_input(
+        "Max. Gewichtsdifferenz in kg", 
+        min_value=0.1, max_value=30.0, value=5.0, step=0.5,
+        help="Die absolute Obergrenze, wie viele Kilo zwei Gegner auseinander sein dürfen."
+    )
+    max_age_diff = st.number_input(
+        "Max. Altersdifferenz", 
+        min_value=1, max_value=60, value=8, step=1,
+        help="Der maximale Altersunterschied in Jahren, der zwischen zwei Kämpfern liegen darf."
+    )
+    max_fight_diff = st.number_input(
+        "Max. Kampfdifferenz", 
+        min_value=0, max_value=100, value=5, step=1,
+        help="Die maximale Differenz in der Anzahl absolvierter Kämpfe zwischen beiden Kontrahenten."
+    )
     max_win_diff = st.number_input("Max. Siege-Differenz", min_value=0, max_value=100, value=5, step=1)
     max_loss_diff = st.number_input("Max. Niederlagen-Differenz", min_value=0, max_value=100, value=5, step=1)
-    min_score = st.slider("Mindest-Score", min_value=0, max_value=100, value=50, step=1)
+    
+    min_score = st.slider(
+        "Mindest-Score", 
+        min_value=0, max_value=100, value=50, step=1,
+        help="Der Qualitätsfilter für das 'Gesamtpaket'. Jedes Paar startet bei 100 Punkten. Unterschiede geben Abzüge. Fällt ein Paar unter diesen Mindestwert, wird der Kampf verboten."
+    )
 
     st.header("⚖️ Gewichtsklassen verwalten")
     
@@ -417,13 +444,15 @@ with st.sidebar:
         st.rerender()
 
     st.markdown("---")
-    st.subheader("Gewichtung (Strafen-Multiplikator)")
-    w_weight = st.slider("Gewicht", 0.0, 5.0, 3.0, 0.5)
-    w_age = st.slider("Alter", 0.0, 5.0, 1.5, 0.5)
-    w_fights = st.slider("Anzahl Kämpfe", 0.0, 5.0, 2.0, 0.5)
-    w_wins = st.slider("Siege", 0.0, 5.0, 1.0, 0.5)
-    w_losses = st.slider("Niederlagen", 0.0, 5.0, 1.0, 0.5)
-    w_winrate = st.slider("Siegquote", 0.0, 5.0, 1.0, 0.5)
+    st.subheader("📉 Strafen-Multiplikator")
+    st.caption("Bestimmt, welches Kriterium dem System bei Abweichungen am wichtigsten ist. Höhere Werte bedeuten empfindlichere Punktabzüge beim Match-Score.")
+    
+    w_weight = st.slider("Gewichtung: Gewicht", 0.0, 5.0, 3.0, 0.5, help="Bestimmt, wie schwer Gewichtsunterschiede bei der Punktevergabe bestraft werden.")
+    w_age = st.slider("Gewichtung: Alter", 0.0, 5.0, 1.5, 0.5, help="Bestimmt, wie schwer Altersunterschiede bestraft werden.")
+    w_fights = st.slider("Gewichtung: Anzahl Kämpfe", 0.0, 5.0, 2.0, 0.5, help="Bestimmt, wie schwer Unterschiede in der Kampferfahrung bestraft werden.")
+    w_wins = st.slider("Gewichtung: Siege", 0.0, 5.0, 1.0, 0.5)
+    w_losses = st.slider("Gewichtung: Niederlagen", 0.0, 5.0, 1.0, 0.5)
+    w_winrate = st.slider("Gewichtung: Siegquote", 0.0, 5.0, 1.0, 0.5, help="Bestimmt, wie schwer eine unterschiedliche prozentuale Siegesrate bestraft wird.")
 
     st.download_button(
         "Excel-Vorlage herunterladen",
@@ -447,7 +476,7 @@ settings = MatchSettings(
 
 uploaded_file = st.file_uploader("Excel-Datei hochladen (.xlsx)", type=["xlsx"])
 
-st.info(f"Pflichtspalten: {', '.join(REQUIRED_COLUMNS)}")
+st.info(f"Pflichtspalten in der Excel: {', '.join(REQUIRED_COLUMNS)}")
 
 if uploaded_file is not None:
     try:
