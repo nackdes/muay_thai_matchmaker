@@ -7,12 +7,11 @@ import networkx as nx
 import pandas as pd
 import streamlit as st
 
-# Erweiterte Pflichtspalten inkl. Alter
+
 REQUIRED_COLUMNS = [
     "Name",
     "Verein",
     "Geschlecht",
-    "Alter",
     "Gewicht",
     "Kämpfe",
     "Siege",
@@ -32,8 +31,6 @@ COLUMN_ALIASES = {
     "geschlecht": "Geschlecht",
     "gender": "Geschlecht",
     "sex": "Geschlecht",
-    "alter": "Alter",
-    "age": "Alter",
     "gewicht": "Gewicht",
     "gewicht kg": "Gewicht",
     "gewicht (kg)": "Gewicht",
@@ -61,7 +58,6 @@ COLUMN_ALIASES = {
 @dataclass
 class Weights:
     weight: float
-    age: float
     fights: float
     wins: float
     losses: float
@@ -71,13 +67,11 @@ class Weights:
 @dataclass
 class MatchSettings:
     max_weight_diff: float
-    max_age_diff: int
     max_fight_diff: int
     max_win_diff: int
     max_loss_diff: int
     min_score: float
     same_gender_only: bool
-    strict_class_matching: bool
     weights: Weights
 
 
@@ -102,20 +96,6 @@ def normalize_gender(value: object) -> str:
 
 def normalize_club(value: object) -> str:
     return re.sub(r"\s+", " ", str(value).strip().lower())
-
-
-def get_experience_class(fights: int) -> str:
-    """Teilt Kämpfer anhand der Kampferfahrung in typische MTBD/Klassenschemata ein."""
-    if fights == 0:
-        return "Newcomer (0)"
-    elif fights <= 5:
-        return "D-Klasse (1-5)"
-    elif fights <= 15:
-        return "C-Klasse (6-15)"
-    elif fights <= 25:
-        return "B-Klasse (16-25)"
-    else:
-        return "A-Klasse (>25)"
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,7 +125,7 @@ def clean_fighters(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     for col in ["Name", "Verein", "Geschlecht"]:
         df[col] = df[col].astype(str).str.strip()
 
-    for col in ["Alter", "Gewicht", "Kämpfe", "Siege", "Niederlagen"]:
+    for col in ["Gewicht", "Kämpfe", "Siege", "Niederlagen"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df["Geschlecht_norm"] = df["Geschlecht"].apply(normalize_gender)
@@ -161,7 +141,7 @@ def clean_fighters(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             errors.append(f"Zeile {line}: Verein fehlt.")
         if not row["Geschlecht"] or row["Geschlecht"].lower() == "nan":
             errors.append(f"Zeile {line}: Geschlecht fehlt.")
-        for col in ["Alter", "Gewicht", "Kämpfe", "Siege", "Niederlagen"]:
+        for col in ["Gewicht", "Kämpfe", "Siege", "Niederlagen"]:
             if pd.isna(row[col]):
                 errors.append(f"Zeile {line}: {col} ist keine Zahl.")
             elif float(row[col]) < 0:
@@ -173,12 +153,10 @@ def clean_fighters(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     if errors:
         return df, errors
 
-    df["Alter"] = df["Alter"].round().astype(int)
     df["Kämpfe"] = df["Kämpfe"].round().astype(int)
     df["Siege"] = df["Siege"].round().astype(int)
     df["Niederlagen"] = df["Niederlagen"].round().astype(int)
     df["Gewicht"] = df["Gewicht"].astype(float)
-    df["Klasse"] = df["Kämpfe"].apply(get_experience_class)
     return df.reset_index(drop=True), []
 
 
@@ -187,19 +165,14 @@ def score_pair(a: pd.Series, b: pd.Series, settings: MatchSettings) -> Optional[
         return None
     if settings.same_gender_only and a["Geschlecht_norm"] != b["Geschlecht_norm"]:
         return None
-    if settings.strict_class_matching and a["Klasse"] != b["Klasse"]:
-        return None
 
     weight_diff = abs(float(a["Gewicht"]) - float(b["Gewicht"]))
-    age_diff = abs(int(a["Alter"]) - int(b["Alter"]))
     fight_diff = abs(int(a["Kämpfe"]) - int(b["Kämpfe"]))
     win_diff = abs(int(a["Siege"]) - int(b["Siege"]))
     loss_diff = abs(int(a["Niederlagen"]) - int(b["Niederlagen"]))
     winrate_diff = abs(float(a["Winrate"]) - float(b["Winrate"]))
 
     if weight_diff > settings.max_weight_diff:
-        return None
-    if age_diff > settings.max_age_diff:
         return None
     if fight_diff > settings.max_fight_diff:
         return None
@@ -210,7 +183,6 @@ def score_pair(a: pd.Series, b: pd.Series, settings: MatchSettings) -> Optional[
 
     weights_sum = (
         settings.weights.weight
-        + settings.weights.age
         + settings.weights.fights
         + settings.weights.wins
         + settings.weights.losses
@@ -221,7 +193,6 @@ def score_pair(a: pd.Series, b: pd.Series, settings: MatchSettings) -> Optional[
 
     penalty = 0.0
     penalty += settings.weights.weight * min(weight_diff / max(settings.max_weight_diff, 0.1), 1.0)
-    penalty += settings.weights.age * min(age_diff / max(settings.max_age_diff, 1), 1.0)
     penalty += settings.weights.fights * min(fight_diff / max(settings.max_fight_diff, 1), 1.0)
     penalty += settings.weights.wins * min(win_diff / max(settings.max_win_diff, 1), 1.0)
     penalty += settings.weights.losses * min(loss_diff / max(settings.max_loss_diff, 1), 1.0)
@@ -234,7 +205,6 @@ def score_pair(a: pd.Series, b: pd.Series, settings: MatchSettings) -> Optional[
     return {
         "Score": round(score, 1),
         "Gewichtsdifferenz": round(weight_diff, 2),
-        "Altersdifferenz": age_diff,
         "Kampfdifferenz": fight_diff,
         "Siege-Differenz": win_diff,
         "Niederlagen-Differenz": loss_diff,
@@ -277,15 +247,13 @@ def build_matches(fighters: pd.DataFrame, settings: MatchSettings) -> Tuple[pd.D
             continue
         unmatched_rows.append(
             {
-                "ID": idx,
                 "Name": fighter["Name"],
                 "Verein": fighter["Verein"],
                 "Geschlecht": fighter["Geschlecht_norm"],
-                "Alter": fighter["Alter"],
                 "Gewicht": fighter["Gewicht"],
                 "Kämpfe": fighter["Kämpfe"],
-                "Klasse": fighter["Klasse"],
-                "Bilanz": f'{fighter["Siege"]}-{fighter["Niederlagen"]}',
+                "Siege": fighter["Siege"],
+                "Niederlagen": fighter["Niederlagen"],
             }
         )
     unmatched_df = pd.DataFrame(unmatched_rows)
@@ -297,18 +265,14 @@ def make_output_row(a: pd.Series, b: pd.Series, details: Dict[str, float]) -> Di
         "Kämpfer A": a["Name"],
         "Verein A": a["Verein"],
         "Geschlecht A": a["Geschlecht_norm"],
-        "Alter A": a["Alter"],
         "Gewicht A": a["Gewicht"],
         "Kämpfe A": a["Kämpfe"],
-        "Klasse A": a["Klasse"],
         "Bilanz A": f'{a["Siege"]}-{a["Niederlagen"]}',
         "Kämpfer B": b["Name"],
         "Verein B": b["Verein"],
         "Geschlecht B": b["Geschlecht_norm"],
-        "Alter B": b["Alter"],
         "Gewicht B": b["Gewicht"],
         "Kämpfe B": b["Kämpfe"],
-        "Klasse B": b["Klasse"],
         "Bilanz B": f'{b["Siege"]}-{b["Niederlagen"]}',
         **details,
     }
@@ -326,10 +290,10 @@ def export_to_excel(matches: pd.DataFrame, unmatched: pd.DataFrame, candidates: 
 def template_excel() -> bytes:
     sample = pd.DataFrame(
         [
-            ["Kämpfer 1", "Gym Alpha", "männlich", 25, 70.0, 3, 2, 1],
-            ["Kämpfer 2", "Gym Beta", "männlich", 27, 71.2, 4, 2, 2],
-            ["Kämpfer 3", "Gym Gamma", "weiblich", 19, 58.5, 1, 1, 0],
-            ["Kämpfer 4", "Gym Delta", "weiblich", 21, 59.0, 2, 1, 1],
+            ["Kämpfer 1", "Gym Alpha", "männlich", 70.0, 3, 2, 1],
+            ["Kämpfer 2", "Gym Beta", "männlich", 71.2, 4, 2, 2],
+            ["Kämpfer 3", "Gym Gamma", "weiblich", 58.5, 1, 1, 0],
+            ["Kämpfer 4", "Gym Delta", "weiblich", 59.0, 2, 1, 1],
         ],
         columns=REQUIRED_COLUMNS,
     )
@@ -339,28 +303,24 @@ def template_excel() -> bytes:
     return output.getvalue()
 
 
-st.set_page_config(page_title="Muay Thai Matchmaker Pro", page_icon="🥊", layout="wide")
-st.title("🥊 Muay Thai Matchmaker Pro")
-st.caption("Importiere eine Excel-Datei und finde optimale, nicht überlappende Kampfpaarungen.")
+st.set_page_config(page_title="Muay Thai Matchmaker", page_icon="🥊", layout="wide")
+st.title("🥊 Muay Thai Matchmaker")
+st.caption("Importiere eine Excel-Datei und finde optimale, nicht überlappende Kampfpaarungen. Gleicher Verein wird immer ausgeschlossen.")
 
 with st.sidebar:
     st.header("Matching-Regeln")
     same_gender_only = st.checkbox("Nur gleiches Geschlecht matchen", value=True)
-    strict_class_matching = st.checkbox("Strikte Klassen-Trennung (z.B. C-Klasse nur gegen C-Klasse)", value=False)
-    
     max_weight_diff = st.number_input("Max. Gewichtsdifferenz in kg", min_value=0.1, max_value=30.0, value=5.0, step=0.5)
-    max_age_diff = st.number_input("Max. Altersdifferenz", min_value=1, max_value=60, value=8, step=1)
     max_fight_diff = st.number_input("Max. Kampfdifferenz", min_value=0, max_value=100, value=5, step=1)
     max_win_diff = st.number_input("Max. Siege-Differenz", min_value=0, max_value=100, value=5, step=1)
     max_loss_diff = st.number_input("Max. Niederlagen-Differenz", min_value=0, max_value=100, value=5, step=1)
-    min_score = st.slider("Mindest-Score", min_value=0, max_value=100, value=50, step=1)
+    min_score = st.slider("Mindest-Score", min_value=0, max_value=100, value=55, step=1)
 
-    st.subheader("Gewichtung (Strafen-Multiplikator)")
+    st.subheader("Gewichtung")
     w_weight = st.slider("Gewicht", 0.0, 5.0, 3.0, 0.5)
-    w_age = st.slider("Alter", 0.0, 5.0, 1.5, 0.5)
     w_fights = st.slider("Anzahl Kämpfe", 0.0, 5.0, 2.0, 0.5)
-    w_wins = st.slider("Siege", 0.0, 5.0, 1.0, 0.5)
-    w_losses = st.slider("Niederlagen", 0.0, 5.0, 1.0, 0.5)
+    w_wins = st.slider("Siege", 0.0, 5.0, 1.5, 0.5)
+    w_losses = st.slider("Niederlagen", 0.0, 5.0, 1.5, 0.5)
     w_winrate = st.slider("Siegquote", 0.0, 5.0, 1.0, 0.5)
 
     st.download_button(
@@ -372,19 +332,17 @@ with st.sidebar:
 
 settings = MatchSettings(
     max_weight_diff=float(max_weight_diff),
-    max_age_diff=int(max_age_diff),
     max_fight_diff=int(max_fight_diff),
     max_win_diff=int(max_win_diff),
     max_loss_diff=int(max_loss_diff),
     min_score=float(min_score),
     same_gender_only=bool(same_gender_only),
-    strict_class_matching=bool(strict_class_matching),
-    weights=Weights(w_weight, w_age, w_fights, w_wins, w_losses, w_winrate),
+    weights=Weights(w_weight, w_fights, w_wins, w_losses, w_winrate),
 )
 
 uploaded_file = st.file_uploader("Excel-Datei hochladen (.xlsx)", type=["xlsx"])
 
-st.info(f"Pflichtspalten: {', '.join(REQUIRED_COLUMNS)}")
+st.info("Pflichtspalten: Name, Verein, Geschlecht, Gewicht, Kämpfe, Siege, Niederlagen")
 
 if uploaded_file is not None:
     try:
@@ -399,105 +357,39 @@ if uploaded_file is not None:
             st.stop()
 
         st.subheader("Importierte Kämpfer")
-        st.dataframe(fighters[["Name", "Verein", "Geschlecht", "Alter", "Gewicht", "Kämpfe", "Klasse"]], use_container_width=True, hide_index=True)
+        st.dataframe(fighters[REQUIRED_COLUMNS], use_container_width=True, hide_index=True)
 
         matches_df, unmatched_df, candidates_df = build_matches(fighters, settings)
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("Kämpfer Gesamt", len(fighters))
-        col2.metric("Automatische Matches", len(matches_df))
-        col3.metric("Noch ungematcht", len(unmatched_df))
+        col1.metric("Kämpfer", len(fighters))
+        col2.metric("Matches", len(matches_df))
+        col3.metric("Nicht gematcht", len(unmatched_df))
 
-        st.subheader("Optimale Paarungen (Algorithmus)")
+        st.subheader("Optimale Paarungen")
+        st.caption("Die Optimierung maximiert zuerst die Anzahl der Paarungen und danach den kombinierten Match-Score.")
         if matches_df.empty:
-            st.warning("Keine automatischen Paarungen gefunden. Passe die Filter an.")
+            st.warning("Keine gültigen Paarungen gefunden. Erhöhe die Toleranzen oder senke den Mindest-Score.")
         else:
             st.dataframe(matches_df, use_container_width=True, hide_index=True)
 
-        # NEUES FEATURE: Manueller Matchmaker für ungematchte Kämpfer
-        st.subheader("🛠️ Manueller Matchmaker für Nachzügler")
-        if not unmatched_df.empty and len(unmatched_df) >= 2:
-            st.write("Verwende dieses Tool, um Kämpfer manuell zu paaren, bei denen der Algorithmus restriktiv war.")
-            
-            col_m1, col_m2 = st.columns(2)
-            
-            with col_m1:
-                f1_options = {f"{row['Name']} ({row['Verein']} - {row['Gewicht']}kg - {row['Klasse']})": row['ID'] for _, row in unmatched_df.iterrows()}
-                fighter_1_label = st.selectbox("Wähle Kämpfer A:", options=list(f1_options.keys()), key="man_f1")
-                f1_id = f1_options[fighter_1_label]
-                
-            with col_m2:
-                # Filter out selected fighter A from options for B
-                f2_options = {f"{row['Name']} ({row['Verein']} - {row['Gewicht']}kg - {row['Klasse']})": row['ID'] for _, row in unmatched_df.iterrows() if row['ID'] != f1_id}
-                fighter_2_label = st.selectbox("Wähle Kämpfer B:", options=list(f2_options.keys()), key="man_f2")
-                
-            if st.button("Manuelles Match erzwingen und hinzufügen"):
-                f2_id = f2_options[fighter_2_label]
-                
-                # Erzeuge Zeile händisch ohne Score-Einschränkungen
-                fa_series = fighters.loc[f1_id]
-                fb_series = fighters.loc[f2_id]
-                
-                # Berechne grobe Details für die Tabelle
-                man_details = {
-                    "Score": 100.0,
-                    "Gewichtsdifferenz": round(abs(fa_series["Gewicht"] - fb_series["Gewicht"]), 2),
-                    "Altersdifferenz": abs(fa_series["Alter"] - fb_series["Alter"]),
-                    "Kampfdifferenz": abs(fa_series["Kämpfe"] - fb_series["Kämpfe"]),
-                    "Siege-Differenz": abs(fa_series["Siege"] - fb_series["Siege"]),
-                    "Niederlagen-Differenz": abs(fa_series["Niederlagen"] - fb_series["Niederlagen"]),
-                    "Winrate-Differenz": round(abs(fa_series["Winrate"] - fb_series["Winrate"]), 3)
-                }
-                
-                new_row = pd.DataFrame([make_output_row(fa_series, fb_series, man_details)])
-                
-                # In Session State speichern, um es persistent an die Tabelle anzuhängen
-                if "manual_matches" not in st.session_state:
-                    st.session_state.manual_matches = pd.DataFrame()
-                
-                st.session_state.manual_matches = pd.concat([st.session_state.manual_matches, new_row], ignore_index=True)
-                st.success(f"Match zwischen {fa_series['Name']} und {fb_series['Name']} wurde hinzugefügt! (Seite lädt neu...)")
-                st.rerender()
-        else:
-            st.write("Nicht genug ungematchte Kämpfer für eine manuelle Auswahl.")
-
-        # Falls manuelle Matches existieren, hänge sie an oder zeige sie separat an
-        if "manual_matches" in st.session_state and not st.session_state.manual_matches.empty:
-            st.subheader("➕ Manuell hinzugefügte Paarungen")
-            st.dataframe(st.session_state.manual_matches, use_container_width=True, hide_index=True)
-            if st.button("Alle manuellen Matches zurücksetzen"):
-                st.session_state.manual_matches = pd.DataFrame()
-                st.rerender()
-            
-            # Kombiniere für den Export
-            final_matches_df = pd.concat([matches_df, st.session_state.manual_matches], ignore_index=True)
-            
-            # Berechne die ungematchten Kämpfer neu, indem die manuell gematchten Namen abgezogen werden
-            man_names = set(st.session_state.manual_matches["Kämpfer A"]).union(set(st.session_state.manual_matches["Kämpfer B"]))
-            final_unmatched_df = unmatched_df[~unmatched_df["Name"].isin(man_names)]
-        else:
-            final_matches_df = matches_df
-            final_unmatched_df = unmatched_df
-
-        # Restliche Anzeigen aktualisiert
-        with st.expander("Verbleibende ungematchte Kämpfer"):
-            if final_unmatched_df.empty:
-                st.success("Alle Kämpfer wurden erfolgreich untergebracht!")
+        with st.expander("Nicht gematchte Kämpfer"):
+            if unmatched_df.empty:
+                st.success("Alle Kämpfer wurden gematcht.")
             else:
-                st.dataframe(final_unmatched_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+                st.dataframe(unmatched_df, use_container_width=True, hide_index=True)
 
-        with st.expander("Alle mathematisch gültigen Match-Kandidaten (Top 250)"):
+        with st.expander("Alle gültigen Kandidatenpaare"):
             if candidates_df.empty:
-                st.write("Keine gültigen Kandidatenpaare im Toleranzbereich gefunden.")
+                st.write("Keine gültigen Kandidatenpaare gefunden.")
             else:
                 st.dataframe(candidates_df.head(250), use_container_width=True, hide_index=True)
 
-        # Export der finalen Listen (inkl. der händischen Paarungen)
-        export_bytes = export_to_excel(final_matches_df, final_unmatched_df, candidates_df)
+        export_bytes = export_to_excel(matches_df, unmatched_df, candidates_df)
         st.download_button(
-            "Finale Kampfliste als Excel herunterladen",
+            "Ergebnis als Excel herunterladen",
             data=export_bytes,
-            file_name="muay_thai_turnier_matches.xlsx",
+            file_name="muay_thai_matches.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
