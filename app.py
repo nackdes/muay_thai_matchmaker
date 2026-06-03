@@ -441,14 +441,25 @@ if not st.session_state.current_matches.empty:
             st.success(f"Match zwischen {fa['Name']} und {fb['Name']} erzwungen!")
             safe_rerun()
 
-    # 💾 ARBEITSSTAND SICHERN (JSON EXPORT)
+# 💾 ARBEITSSTAND SICHERN (JSON EXPORT)
     st.subheader("💾 Aktuellen Arbeitsstand sichern")
     state_json = json.dumps({
         "matches": st.session_state.current_matches.to_dict(orient="records"),
         "unmatched": st.session_state.current_unmatched.to_dict(orient="records"),
         "raw_fighters": st.session_state.raw_fighters_data.to_dict(orient="records")
     }, indent=2)
-    st.download_button("💾 Bearbeitungsstand sichern (.json)", data=state_json, file_name="matchmaker_speicherstand.json", mime="application/json")
+    
+    # Zeitstempel im Format YYYYMMDD-HHMMSS generieren
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_filename = f"matchmaker_speicherstand_{timestamp}.json"
+    
+    st.download_button(
+        label="💾 Bearbeitungsstand sichern (.json)", 
+        data=state_json, 
+        file_name=backup_filename, 
+        mime="application/json"
+    )
 
     # 🖨️ EXCEL-EXPORT
     st.subheader("📊 Finaler Export")
