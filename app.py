@@ -1,5 +1,6 @@
 import io
 import re
+import json
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -260,7 +261,6 @@ def score_pair(a: pd.Series, b: pd.Series, settings: MatchSettings) -> Optional[
 
     score = max(0.0, 100.0 * (1.0 - penalty / weights_sum))
     
-    # Kleiner Abzug falls Disziplinen gemischt werden (wenn nicht strikt getrennt)
     if a["Disziplin_norm"] != b["Disziplin_norm"]:
         score -= 15.0
         score = max(0.0, score)
@@ -306,6 +306,10 @@ def build_matches(fighters: pd.DataFrame, settings: MatchSettings) -> Tuple[pd.D
         matched_indices.update([i, j])
 
     matches_df = pd.DataFrame(match_rows)
+    # Füge eine Standard-Kampfreihenfolge hinzu
+    if not matches_df.empty:
+        matches_df.insert(0, "Kampf Nr.", range(1, len(matches_df) + 1))
+
     candidates_df = pd.DataFrame(candidate_rows).sort_values(by="Score", ascending=False) if candidate_rows else pd.DataFrame()
 
     unmatched_rows = []
@@ -332,7 +336,6 @@ def build_matches(fighters: pd.DataFrame, settings: MatchSettings) -> Tuple[pd.D
 
 
 def make_output_row(a: pd.Series, b: pd.Series, details: Dict[str, float]) -> Dict[str, object]:
-    # Bestimme Disziplin-Label für die Paarung
     match_discipline = a["Disziplin_norm"] if a["Disziplin_norm"] == b["Disziplin_norm"] else f"{a['Disziplin_norm']} vs {b['Disziplin_norm']}"
     return {
         "Kampf-Disziplin": match_discipline,
@@ -386,91 +389,54 @@ def template_excel() -> bytes:
 # Streamlit Seiten-Konfiguration
 st.set_page_config(page_title="Muay Thai & K1 Matchmaker", page_icon="🥊", layout="wide")
 st.title("🥊 Muay Thai & K1 Matchmaker Pro")
-st.caption("Importiere eine Excel-Datei und finde optimale, nicht überlappende Kampfpaarungen getrennt nach Regelwerk.")
+st.caption("Importiere eine Excel-Datei, erstelle optimale Paarungen und sortiere die Kampfreihenfolge flexibel um.")
 
-# Initialisiere Standard-Gewichtsklassen im Session State
+# Initialisiere Gewichtsklassen
 if "weight_classes" not in st.session_state:
     st.session_state.weight_classes = [
-        ("Fliegengewicht", 51.0),
-        ("Bantamgewicht", 54.0),
-        ("Federgewicht", 57.0),
-        ("Leichtgewicht", 60.0),
-        ("Halbweltergewicht", 63.5),
-        ("Weltergewicht", 67.0),
-        ("Halbmittelgewicht", 71.0),
-        ("Mittelgewicht", 75.0),
-        ("Halbschwergewicht", 81.0),
-        ("Cruisergewicht", 86.0),
-        ("Schwergewicht", 91.0)
+        ("Fliegengewicht", 51.0), ("Bantamgewicht", 54.0), ("Federgewicht", 57.0),
+        ("Leichtgewicht", 60.0), ("Halbweltergewicht", 63.5), ("Weltergewicht", 67.0),
+        ("Halbmittelgewicht", 71.0), ("Mittelgewicht", 75.0), ("Halbschwergewicht", 81.0),
+        ("Cruisergewicht", 86.0), ("Schwergewicht", 91.0)
     ]
+
+# Session State für die Arbeitsergebnisse (wichtig für Re-Import und persistenten Zustand)
+if "current_matches" not in st.session_state:
+    st.session_state.current_matches = pd.DataFrame()
+if "current_unmatched" not in st.session_state:
+    st.session_state.current_unmatched = pd.DataFrame()
 
 with st.sidebar:
     st.header("⚙️ Matching-Regeln")
-    same_gender_only = st.checkbox(
-        "Nur gleiches Geschlecht matchen", 
-        value=True,
-        help="Wenn aktiv, können Personen mit unterschiedlichen Geschlechtseinträgen niemals gegeneinander gelost werden."
-    )
-    strict_discipline_matching = st.checkbox(
-        "Strikte Disziplinen-Trennung",
-        value=True,
-        help="Erzwingt, dass Muay Thai Kämpfer nur gegen Muay Thai Kämpfer und K1 Kämpfer nur gegen K1 Kämpfer antreten. Wenn deaktiviert, sind stilübergreifende Kämpfe mit Punktabzug erlaubt."
-    )
-    strict_class_matching = st.checkbox(
-        "Strikte Klassen-Trennung (Erfahrung)", 
-        value=False,
-        help="Teilt Kämpfer anhand ihrer Kämpfe in Leistungsklassen ein (z.B. Newcomer, C-Klasse). Bei Aktivierung wird klassenübergreifendes Matchen komplett blockiert."
-    )
-    strict_weight_class = st.checkbox(
-        "Strikte Gewichtsklassen-Trennung", 
-        value=False,
-        help="Erzwingt, dass Kämpfer NUR innerhalb der exakt selben Gewichtsklasse (z.B. Weltergewicht) gepaart werden. Wenn deaktiviert, entscheidet die kg-Differenz."
-    )
+    same_gender_only = st.checkbox("Nur gleiches Geschlecht matchen", value=True)
+    strict_discipline_matching = st.checkbox("Strikte Disziplinen-Trennung", value=True)
+    strict_class_matching = st.checkbox("Strikte Klassen-Trennung (Erfahrung)", value=False)
+    strict_weight_class = st.checkbox("Strikte Gewichtsklassen-Trennung", value=False)
     
     st.markdown("---")
-    max_weight_diff = st.number_input(
-        "Max. Gewichtsdifferenz in kg", 
-        min_value=0.1, max_value=30.0, value=5.0, step=0.5,
-        help="Die absolute Obergrenze, wie viele Kilo zwei Gegner auseinander sein dürfen."
-    )
-    max_age_diff = st.number_input(
-        "Max. Altersdifferenz", 
-        min_value=1, max_value=60, value=8, step=1,
-        help="Der maximale Altersunterschied in Jahren, der zwischen zwei Kämpfern liegen darf."
-    )
-    max_fight_diff = st.number_input(
-        "Max. Kampfdifferenz", 
-        min_value=0, max_value=100, value=5, step=1,
-        help="Die maximale Differenz in der Anzahl absolvierter Kämpfe zwischen beiden Kontrahenten."
-    )
+    max_weight_diff = st.number_input("Max. Gewichtsdifferenz in kg", min_value=0.1, max_value=30.0, value=5.0, step=0.5)
+    max_age_diff = st.number_input("Max. Altersdifferenz", min_value=1, max_value=60, value=8, step=1)
+    max_fight_diff = st.number_input("Max. Kampfdifferenz", min_value=0, max_value=100, value=5, step=1)
     max_win_diff = st.number_input("Max. Siege-Differenz", min_value=0, max_value=100, value=5, step=1)
     max_loss_diff = st.number_input("Max. Niederlagen-Differenz", min_value=0, max_value=100, value=5, step=1)
-    
-    min_score = st.slider(
-        "Mindest-Score", 
-        min_value=0, max_value=100, value=50, step=1,
-        help="Der Qualitätsfilter für das 'Gesamtpaket'. Jedes Paar startet bei 100 Punkten. Unterschiede geben Abzüge. Fällt ein Paar unter diesen Mindestwert, wird der Kampf verboten."
-    )
+    min_score = st.slider("Mindest-Score", min_value=0, max_value=100, value=50, step=1)
 
     st.header("⚖️ Gewichtsklassen verwalten")
     with st.form("new_weight_class_form", clear_on_submit=True):
-        new_name = st.text_input("Name der Klasse (z.B. Welter)")
+        new_name = st.text_input("Name der Klasse")
         new_limit = st.number_input("Maximalgewicht (kg)", min_value=1.0, max_value=200.0, value=70.0, step=0.5)
-        submitted = st.form_submit_button("Hinzufügen")
-        if submitted and new_name:
+        if st.form_submit_button("Hinzufügen") and new_name:
             st.session_state.weight_classes.append((new_name, float(new_limit)))
             st.rerender()
 
-    st.subheader("Aktuelle Klassen (Obergrenze):")
+    # Klassen löschen
     sorted_classes = sorted(st.session_state.weight_classes, key=lambda x: x[1])
-    
     to_delete = None
     for idx, (name, limit) in enumerate(sorted_classes):
         col_c1, col_c2 = st.columns([3, 1])
         col_c1.write(f"**{name}**: -{limit} kg")
         if col_c2.button("❌", key=f"del_{idx}"):
             to_delete = (name, limit)
-            
     if to_delete:
         st.session_state.weight_classes.remove(to_delete)
         st.rerender()
@@ -492,129 +458,97 @@ with st.sidebar:
     )
 
 settings = MatchSettings(
-    max_weight_diff=float(max_weight_diff),
-    max_age_diff=int(max_age_diff),
-    max_fight_diff=int(max_fight_diff),
-    max_win_diff=int(max_win_diff),
-    max_loss_diff=int(max_loss_diff),
-    min_score=float(min_score),
-    same_gender_only=bool(same_gender_only),
-    strict_class_matching=bool(strict_class_matching),
-    strict_weight_class=bool(strict_weight_class),
-    strict_discipline_matching=bool(strict_discipline_matching),
+    max_weight_diff=float(max_weight_diff), max_age_diff=int(max_age_diff), max_fight_diff=int(max_fight_diff),
+    max_win_diff=int(max_win_diff), max_loss_diff=int(max_loss_diff), min_score=float(min_score),
+    same_gender_only=bool(same_gender_only), strict_class_matching=bool(strict_class_matching),
+    strict_weight_class=bool(strict_weight_class), strict_discipline_matching=bool(strict_discipline_matching),
     weights=Weights(w_weight, w_age, w_fights, w_wins, w_losses, w_winrate),
 )
 
-uploaded_file = st.file_uploader("Excel-Datei hochladen (.xlsx)", type=["xlsx"])
+# RE-IMPORT / SPEICHERSTAND WIEDERHERSTELLEN
+st.subheader("📂 Backup & Bearbeitungsstand laden")
+saved_state_file = st.file_uploader("Gesicherten Bearbeitungsstand laden (.json)", type=["json"])
 
+if saved_state_file is not None:
+    try:
+        state_data = json.load(saved_state_file)
+        st.session_state.current_matches = pd.DataFrame(state_data["matches"])
+        st.session_state.current_unmatched = pd.DataFrame(state_data["unmatched"])
+        st.success("Bearbeitungsstand erfolgreich wiederhergestellt! Du kannst die Reihenfolge unten weiter bearbeiten.")
+    except Exception as e:
+        st.error(f"Fehler beim Laden des Speicherstands: {e}")
+
+st.markdown("---")
+
+# NEUER IMPORT VON MELDELISTEN
+uploaded_file = st.file_uploader("Meldeliste hochladen (.xlsx)", type=["xlsx"])
 st.info(f"Pflichtspalten in der Excel: {', '.join(REQUIRED_COLUMNS)}")
 
-if uploaded_file is not None:
-    try:
-        raw_df = pd.read_excel(uploaded_file)
-        fighters, validation_errors = clean_fighters(raw_df, st.session_state.weight_classes)
-        if validation_errors:
-            st.error("Bitte korrigiere die Importdatei.")
-            for err in validation_errors[:50]:
-                st.write("- " + err)
-            if len(validation_errors) > 50:
-                st.write(f"… und {len(validation_errors) - 50} weitere Fehler.")
-            st.stop()
+if uploaded_file is not None and saved_state_file is None:
+    if st.button("🚀 Neue Paarungen aus Meldeliste generieren (Überschreibt aktuellen Stand)"):
+        try:
+            raw_df = pd.read_excel(uploaded_file)
+            fighters, validation_errors = clean_fighters(raw_df, st.session_state.weight_classes)
+            if validation_errors:
+                st.error("Bitte korrigiere die Importdatei.")
+                for err in validation_errors[:10]:
+                    st.write("- " + err)
+                st.stop()
 
-        st.subheader("Importierte Kämpfer")
-        st.dataframe(fighters[["Name", "Verein", "Geschlecht", "Alter", "Gewicht", "Gewichtsklasse", "Disziplin_norm", "Kämpfe", "Klasse"]], use_container_width=True, hide_index=True)
-
-        matches_df, unmatched_df, candidates_df = build_matches(fighters, settings)
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Kämpfer Gesamt", len(fighters))
-        col2.metric("Automatische Matches", len(matches_df))
-        col3.metric("Noch ungematcht", len(unmatched_df))
-
-        st.subheader("Optimale Paarungen (Algorithmus)")
-        if matches_df.empty:
-            st.warning("Keine automatischen Paarungen gefunden. Passe die Filter an.")
-        else:
-            st.dataframe(matches_df, use_container_width=True, hide_index=True)
-
-        # Manueller Matchmaker für ungematchte Kämpfer
-        st.subheader("🛠️ Manueller Matchmaker für Nachzügler")
-        if not unmatched_df.empty and len(unmatched_df) >= 2:
-            st.write("Verwende dieses Tool, um Kämpfer manuell zu paaren, bei denen der Algorithmus restriktiv war.")
-            
-            col_m1, col_m2 = st.columns(2)
-            
-            with col_m1:
-                f1_options = {f"{row['Name']} ({row['Verein']} - {row['Disziplin']} - {row['Gewicht']}kg)": row['ID'] for _, row in unmatched_df.iterrows()}
-                fighter_1_label = st.selectbox("Wähle Kämpfer A:", options=list(f1_options.keys()), key="man_f1")
-                f1_id = f1_options[fighter_1_label]
-                
-            with col_m2:
-                f2_options = {f"{row['Name']} ({row['Verein']} - {row['Disziplin']} - {row['Gewicht']}kg)": row['ID'] for _, row in unmatched_df.iterrows() if row['ID'] != f1_id}
-                fighter_2_label = st.selectbox("Wähle Kämpfer B:", options=list(f2_options.keys()), key="man_f2")
-                
-            if st.button("Manuelles Match erzwingen und hinzufügen"):
-                f2_id = f2_options[fighter_2_label]
-                
-                fa_series = fighters.loc[f1_id]
-                fb_series = fighters.loc[f2_id]
-                
-                man_details = {
-                    "Score": 100.0,
-                    "Gewichtsdifferenz": round(abs(fa_series["Gewicht"] - fb_series["Gewicht"]), 2),
-                    "Altersdifferenz": abs(fa_series["Alter"] - fb_series["Alter"]),
-                    "Kampfdifferenz": abs(fa_series["Kämpfe"] - fb_series["Kämpfe"]),
-                    "Siege-Differenz": abs(fa_series["Siege"] - fb_series["Siege"]),
-                    "Niederlagen-Differenz": abs(fa_series["Niederlagen"] - fb_series["Niederlagen"]),
-                    "Winrate-Differenz": round(abs(fa_series["Winrate"] - fb_series["Winrate"]), 3)
-                }
-                
-                new_row = pd.DataFrame([make_output_row(fa_series, fb_series, man_details)])
-                
-                if "manual_matches" not in st.session_state:
-                    st.session_state.manual_matches = pd.DataFrame()
-                
-                st.session_state.manual_matches = pd.concat([st.session_state.manual_matches, new_row], ignore_index=True)
-                st.success(f"Match zwischen {fa_series['Name']} und {fb_series['Name']} wurde hinzugefügt!")
-                st.rerender()
-        else:
-            st.write("Nicht genug ungematchte Kämpfer für eine manuelle Auswahl.")
-
-        if "manual_matches" in st.session_state and not st.session_state.manual_matches.empty:
-            st.subheader("➕ Manuell hinzugefügte Paarungen")
-            st.dataframe(st.session_state.manual_matches, use_container_width=True, hide_index=True)
-            if st.button("Alle manuellen Matches zurücksetzen"):
+            matches_df, unmatched_df, _ = build_matches(fighters, settings)
+            st.session_state.current_matches = matches_df
+            st.session_state.current_unmatched = unmatched_df
+            if "manual_matches" in st.session_state:
                 st.session_state.manual_matches = pd.DataFrame()
-                st.rerender()
-            
-            final_matches_df = pd.concat([matches_df, st.session_state.manual_matches], ignore_index=True)
-            man_names = set(st.session_state.manual_matches["Kämpfer A"]).union(set(st.session_state.manual_matches["Kämpfer B"]))
-            final_unmatched_df = unmatched_df[~unmatched_df["Name"].isin(man_names)]
-        else:
-            final_matches_df = matches_df
-            final_unmatched_df = unmatched_df
+            st.success("Neue Paarungen erfolgreich berechnet!")
+        except Exception as exc:
+            st.error(f"Matching fehlgeschlagen: {exc}")
 
-        with st.expander("Verbleibende ungematchte Kämpfer"):
-            if final_unmatched_df.empty:
-                st.success("Alle Kämpfer wurden erfolgreich untergebracht!")
-            else:
-                st.dataframe(final_unmatched_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+# ANZEIGE UND EDITIEREN DER KAMPFLISTE
+if not st.session_state.current_matches.empty:
+    st.markdown("---")
+    st.header("🔀 Kampfreihenfolge festlegen & bearbeiten")
+    st.write("Du kannst die Reihenfolge ändern, indem du die Zahlen in der Spalte **'Kampf Nr.'** doppelklickst und anpasst. Die Tabelle sortiert sich danach automatisch neu.")
 
-        with st.expander("Alle mathematisch gültigen Match-Kandidaten (Top 250)"):
-            if candidates_df.empty:
-                st.write("Keine gültigen Kandidatenpaare im Toleranzbereich gefunden.")
-            else:
-                st.dataframe(candidates_df.head(250), use_container_width=True, hide_index=True)
+    # Der Daten-Editor erlaubt das Ändern der Kampf-Nummer
+    edited_df = st.data_editor(
+        st.session_state.current_matches,
+        use_container_width=True,
+        hide_index=True,
+        disabled=[col for col in st.session_state.current_matches.columns if col != "Kampf Nr."]
+    )
 
-        export_bytes = export_to_excel(final_matches_df, final_unmatched_df, candidates_df)
-        st.download_button(
-            "Finale Kampfliste als Excel herunterladen",
-            data=export_bytes,
-            file_name="muay_thai_turnier_matches.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    # Automatische Neusortierung nach der geänderten Kampf-Nummer
+    if not edited_df.equals(st.session_state.current_matches):
+        st.session_state.current_matches = edited_df.sort_values(by="Kampf Nr.").reset_index(drop=True)
+        st.rerender()
 
-    except Exception as exc:
-        st.error(f"Import oder Matching fehlgeschlagen: {exc}")
-else:
-    st.write("Lade eine Excel-Datei hoch oder nutze zuerst die Vorlage aus der Seitenleiste.")
+    # EXPORT DES AKTUELLEN SPEICHERSTANDS ALS JSON (Für späteren Import)
+    st.subheader("💾 Aktuellen Arbeitsstand sichern")
+    st.write("Speichere diese Datei ab, um deine manuell geänderte Reihenfolge später wieder in die App laden zu können.")
+    
+    state_json = json.dumps({
+        "matches": st.session_state.current_matches.to_dict(orient="records"),
+        "unmatched": st.session_state.current_unmatched.to_dict(orient="records")
+    }, indent=2)
+    
+    st.download_button(
+        "💾 Aktuellen Bearbeitungsstand sichern (.json)",
+        data=state_json,
+        file_name="matchmaker_bearbeitungsstand.json",
+        mime="application/json"
+    )
+
+    # FINALE EXCEL FÜR DEN TURNIERTAG
+    st.subheader("📊 Finaler Export für den Turniertag")
+    export_bytes = export_to_excel(st.session_state.current_matches, st.session_state.current_unmatched, pd.DataFrame())
+    st.download_button(
+        "🖨️ Finale Kampfliste als Excel herunterladen",
+        data=export_bytes,
+        file_name="finale_kampfliste_turnier.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+if not st.session_state.current_unmatched.empty:
+    with st.expander("Verbleibende ungematchte Kämpfer anzeigen"):
+        st.dataframe(st.session_state.current_unmatched, use_container_width=True, hide_index=True)
