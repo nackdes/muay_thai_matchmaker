@@ -313,14 +313,14 @@ with st.sidebar:
         new_limit = st.number_input("Maximalgewicht (kg)", min_value=1.0, value=70.0, step=0.5)
         if st.form_submit_button("Hinzufügen") and new_name:
             st.session_state.weight_classes.append((new_name, float(new_limit)))
-            st.rerender()
+            st.experimental_rerun()
 
     for idx, (name, limit) in enumerate(sorted(st.session_state.weight_classes, key=lambda x: x[1])):
         col_c1, col_c2 = st.columns([3, 1])
         col_c1.write(f"**{name}**: -{limit} kg")
         if col_c2.button("❌", key=f"del_{idx}"):
             st.session_state.weight_classes.remove((name, limit))
-            st.rerender()
+            st.experimental_rerun()
 
     st.markdown("---")
     st.subheader("📉 Strafen-Multiplikator")
@@ -399,7 +399,7 @@ if not st.session_state.current_matches.empty:
         st.session_state.current_matches['id'] = pd.Categorical(st.session_state.current_matches['id'], categories=sorted_id_list, ordered=True)
         st.session_state.current_matches = st.session_state.current_matches.sort_values('id').reset_index(drop=True)
         st.session_state.current_matches["Kampf Nr."] = range(1, len(st.session_state.current_matches) + 1)
-        st.rerender()
+        st.experimental_rerun()
 
     st.subheader("Aktuelle Kampfliste Übersicht")
     st.dataframe(st.session_state.current_matches.drop(columns=["id"]), use_container_width=True, hide_index=True)
@@ -429,7 +429,7 @@ if not st.session_state.current_matches.empty:
             st.session_state.current_matches = pd.concat([st.session_state.current_matches, new_row], ignore_index=True)
             st.session_state.current_unmatched = st.session_state.current_unmatched[~st.session_state.current_unmatched["ID"].isin([f1_id, f2_id])]
             st.success(f"Match zwischen {fa['Name']} und {fb['Name']} erzwungen!")
-            st.rerender()
+            st.experimental_rerun()
 
     # 💾 ARBEITSSTAND SICHERN (JSON EXPORT)
     st.subheader("💾 Aktuellen Arbeitsstand sichern")
